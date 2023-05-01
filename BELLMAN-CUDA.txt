@@ -1,0 +1,162 @@
+#include <stdio.h>
+#include <time.h>
+#include <math.h>
+#include <omp.h>
+#include <cuda.h>
+#include <cuda_runtime.h>
+#define V 8
+#define E 11
+#define MAX_WEIGHT 1000000
+#define TRUE    1
+#define FALSE   0
+typedef int boolean;
+//
+//Represents an edge or path between Vertices
+typedef struct
+{
+    int u;
+    int v;
+    int weight;
+} Edge;
+//Represents a Vertex
+typedef struct 
+{
+    int title;
+    boolean visited;    
+} Vertex;
+//Finds the branches of the vertex
+__global__ void Find_Vertex(Vertex *vertices, Edge *edges, int *length, int *updateLength, int *changed)
+{
+    int u = threadIdx.x;
+    if(vertices[u].visited == FALSE)
+    {
+        int v;
+        for(v = 0; v < V; v++)
+        {   
+            int weight = edges[u*V+v].weight;
+            if(weight < MAX_WEIGHT)
+            {   
+                if(length[v] > length[u] + weight)
+                {
+                    length[v] = length[u] + weight;
+                    updateLength[v] = length[v];
+                    *changed = 1;
+                }
+            }
+        }
+        vertices[u].visited = TRUE;
+    }
+}
+//Prints the an array of elements
+void printArray(int *array)
+{
+    int i;
+    for(i = 0; i < V; i++)
+    {
+        printf("Shortest Path to Vertex: %d is %d\n", i, array[i]);
+    }
+}
+//Runs the program
+int main(void)
+{
+    //Variables for the Host Device
+    Vertex *vertices;    
+    Edge *edges;
+    //Len is the shortest path and updateLength is a special array for modifying updates to the shortest path
+    int *len, *updateLength;
+    int *d_L, *d_C;
+    Edge *d_E;
+  	int *weights;
+    Vertex *d_V;
+    int *changed;
+    //Sizes used for allocation
+    int sizeV = sizeof(Vertex) * V;
+    int sizeE = sizeof(Edge) * V * V;
+    int size = V * sizeof(int);
+    //Timer initialization
+    float runningTime;
+    cudaEvent_t timeStart, timeEnd;
+    //Creates the timers
+    cudaEventCreate(&timeStart);
+    cudaEventCreate(&timeEnd);
+    //Allocates space for the variables
+    vertices = (Vertex *)malloc(sizeV);
+    edges = (Edge *)malloc(sizeE);
+  	weights = (int *)malloc(E* sizeof(int));
+    len = (int *)malloc(size);
+    updateLength = (int *)malloc(size);
+    changed = (int *)malloc(sizeof(int));
+    //----------------------------------Graph Base Test-------------------------------------//
+	Edge ed[E] = {{0, 4}, {0, 6}, {0,2}, {4,6}, {4,7}, {0, 7}, {7, 3}, {3, 1}, {2,5}, {2, 1}, {5,3}};
+		int w[E] = {10, 90, 30, 20, 20, -1, 10, 20, 10, 10, -1};
+	int i = 0;
+	for(i = 0; i < V; i++){
+		Vertex a = { .title =i , .visited=FALSE};
+		vertices[i] = a;
+	}
+	for(i = 0; i < E; i++){
+		edges[i] = ed[i];
+		weights[i] = w[i];
+	}
+    //----------------------------------Graph Base Test-------------------------------------//
+    // Allocate space on the device
+    cudaMalloc((void**)&d_V, sizeV);
+    cudaMalloc((void**)&d_E, sizeE);
+    cudaMalloc((void**)&d_L, size);
+    cudaMalloc((void**)&d_C, sizeof(int));
+
+    // Copy data from host to device
+    cudaMemcpy(d_V, vertices, sizeV, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_E, edges, sizeE, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_L, len, size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_C, changed, sizeof(int), cudaMemcpyHostToDevice);
+
+    // Set the length of the starting vertex to 0
+    len[0] = 0;
+
+    // Start the timer
+    cudaEventRecord(timeStart, 0);
+
+    // Perform the Bellman-Ford algorithm
+    int iter;
+    for(iter = 0; iter < V-1; iter++)
+    {
+        *changed = 0;
+        cudaMemcpy(d_C, changed, sizeof(int), cudaMemcpyHostToDevice);
+        Find_Vertex<<<1, V>>>(d_V, d_E, d_L, d_L, d_C);
+        cudaMemcpy(changed, d_C, sizeof(int), cudaMemcpyDeviceToHost);
+        if(*changed == 0)
+        {
+            break;
+        }
+    }
+
+    // Stop the timer
+    cudaEventRecord(timeEnd, 0);
+    cudaEventSynchronize(timeEnd);
+    cudaEventElapsedTime(&runningTime, timeStart, timeEnd);
+
+    // Copy data from device to host
+    cudaMemcpy(len, d_L, size, cudaMemcpyDeviceToHost);
+
+    // Print the shortest path to each vertex
+    printArray(len);
+
+    // Free device memory
+    cudaFree(d_V);
+    cudaFree(d_E);
+    cudaFree(d_L);
+    cudaFree(d_C);
+
+    // Free host memory
+    free(vertices);
+    free(edges);
+    free(len);
+    free(updateLength);
+    free(changed);
+
+    // Print the running time
+    printf("Time: %f ms\n", runningTime);
+
+    return 0;
+}
